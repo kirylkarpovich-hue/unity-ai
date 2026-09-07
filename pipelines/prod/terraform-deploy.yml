@@ -1,0 +1,62 @@
+name: Terraform Deploy — prod
+
+on:
+  push:
+    branches: [main]
+    paths: ['terraform/prod/**']
+  pull_request:
+    paths: ['terraform/prod/**']
+  workflow_dispatch:
+    inputs:
+      resource:
+        description: 'Resource'
+        required: true
+        default: all
+        type: choice
+        options: [resource-group, managed-identity, all]
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rg: ${{ steps.filter.outputs.rg }}
+      id: ${{ steps.filter.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override for manual trigger
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          RES="${{ inputs.resource }}"
+          echo "rg=$([[ $RES == resource-group || $RES == all ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "id=$([[ $RES == managed-identity || $RES == all ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            rg: ['terraform/prod/resource-group/**']
+            id: ['terraform/prod/managed-identity/**']
+
+  resource-group:
+    needs: changes
+    if: needs.changes.outputs.rg == 'true'
+    uses: {YOUR_ORG}/pipeline-modules/.github/workflows/terraform-deploy.yml@main
+    with:
+      working_directory: terraform/prod/resource-group
+      environment: prod
+    secrets: inherit
+
+  managed-identity:
+    needs: [changes, resource-group]
+    if: |
+      always() &&
+      needs.changes.outputs.id == 'true' &&
+      (needs.resource-group.result == 'success' || needs.resource-group.result == 'skipped')
+    uses: {YOUR_ORG}/pipeline-modules/.github/workflows/terraform-deploy.yml@main
+    with:
+      working_directory: terraform/prod/managed-identity
+      environment: prod
+    secrets: inherit
